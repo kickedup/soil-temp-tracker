@@ -1,0 +1,55 @@
+name: Collect soil temperature data
+
+on:
+  schedule:
+    # GitHub cron runs in UTC. 10AM Eastern is 14:00 UTC during daylight
+    # time and 15:00 UTC during standard time, so we trigger at both and
+    # let the guard step skip the run that isn't 10AM locally.
+    - cron: "0 14 * * *"
+    - cron: "0 15 * * *"
+  workflow_dispatch: {}  # allows manual runs from the Actions tab
+
+permissions:
+  contents: write
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check local time is 10AM Eastern
+        id: guard
+        run: |
+          HOUR=$(TZ=America/New_York date +%H)
+          echo "Local hour is $HOUR"
+          if [ "$HOUR" = "10" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check out repository
+        if: steps.guard.outputs.run == 'true'
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        if: steps.guard.outputs.run == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        if: steps.guard.outputs.run == 'true'
+        run: pip install -r requirements.txt
+
+      - name: Collect soil data
+        if: steps.guard.outputs.run == 'true'
+        run: python collect_soil_data.py
+
+      - name: Commit and push new data
+        if: steps.guard.outputs.run == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/soil_temperatures.csv
+          git diff --cached --quiet || git commit -m "Add soil data for $(date +%Y-%m-%d)"
+          git push
