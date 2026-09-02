@@ -3,10 +3,12 @@ name: Collect soil temperature data
 on:
   schedule:
     # GitHub cron runs in UTC. 10AM Eastern is 14:00 UTC during daylight
-    # time and 15:00 UTC during standard time, so we trigger at both and
-    # let the guard step skip the run that isn't 10AM locally.
-    - cron: "0 14 * * *"
-    - cron: "0 15 * * *"
+    # time and 15:00 UTC during standard time, so we trigger at both.
+    # Minute 23 avoids the top-of-the-hour congestion that delays runs.
+    # The guard step below skips whichever run finds today's row already
+    # recorded, so delayed or duplicate triggers can't double-log.
+    - cron: "23 14 * * *"
+    - cron: "23 15 * * *"
   workflow_dispatch: {}  # allows manual runs from the Actions tab
 
 permissions:
@@ -16,20 +18,23 @@ jobs:
   collect:
     runs-on: ubuntu-latest
     steps:
-      - name: Check local time is 10AM Eastern
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Skip if today already recorded
         id: guard
         run: |
-          HOUR=$(TZ=America/New_York date +%H)
-          echo "Local hour is $HOUR"
-          if [ "$HOUR" = "10" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          TODAY=$(TZ=America/New_York date +%Y-%m-%d)
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "Manual run - collecting regardless of existing rows"
             echo "run=true" >> "$GITHUB_OUTPUT"
-          else
+          elif grep -q "^$TODAY," data/soil_temperatures.csv 2>/dev/null; then
+            echo "Already have a row for $TODAY - skipping"
             echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "No row yet for $TODAY - collecting"
+            echo "run=true" >> "$GITHUB_OUTPUT"
           fi
-
-      - name: Check out repository
-        if: steps.guard.outputs.run == 'true'
-        uses: actions/checkout@v4
 
       - name: Set up Python
         if: steps.guard.outputs.run == 'true'
